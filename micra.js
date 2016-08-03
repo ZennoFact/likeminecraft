@@ -4,9 +4,16 @@ var micra = (function () {
   var camera;
   var hemiLight;
   // var directionalLigh, ambientLight;
-  var control;
+  var controls, controlsEnabled;
+  var moveForward,
+      moveBackward,
+      moveLeft,
+      moveRight,
+      canJump;
+  var velocity;
   var clock;
   var projector;
+  // var havePointerLock;
 
   var init = function () {
     renderer = new THREE.WebGLRenderer({antialias: true});
@@ -38,17 +45,17 @@ var micra = (function () {
     hemiLight = new THREE.HemisphereLight(0x0000ff, 0x00ff00, 0.6);
     scene.add( hemiLight );
 
-    control = new THREE.FirstPersonControls(camera);
-    control.lookSpeed = 0.05;
-    control.movementSpeed = 5;
-    control.noFly = true;
-    control.lookVertical = true;
-    control.constrainVertical = true;
-    control.verticalMin = 1.0;
-    control.verticalMax = 2.0;
-    control.lon = 0.1;
+    controls = new THREE.PointerLockControls(camera);
+    scene.add(controls.getObject());
 
     clock = new THREE.Clock();
+    velocity = new THREE.Vector3();
+
+    // havePointerLock = checkForPointerLock();
+    // initPointerLock();
+    controlsEnabled = true;
+    controls.enabled = true;
+    initControls();
 
     // TODO: ここで読み込んだテクスチャーで各ブロックを処理
     textures = loadTexture();
@@ -75,12 +82,12 @@ var micra = (function () {
 
 
     window.addEventListener('resize', onWindowResize, false);
-    window.addEventListener('click', onDocumentMouseDown);
+    window.addEventListener('click', onDocumentMouseDown, false);
   };
 
   var render = function () {
     renderer.render(scene, camera);
-    control.update(clock.getDelta());
+    updateControls();
     requestAnimationFrame( render );
   };
 
@@ -107,6 +114,83 @@ var micra = (function () {
     if (intersects.length > 0) {
       intersects[0].object.material.transparent = true;
       scene.remove(intersects[0].object)
+    }
+  };
+
+  function initControls() {
+    document.addEventListener('keydown', onKeyDown, false);
+    document.addEventListener('keyup', onKeyUp, false);
+  }
+
+  function onKeyDown(e) {
+    switch (e.keyCode) {
+      case 38: // up
+      case 87: // w
+        moveForward = true;
+        break;
+      case 37: // left
+      case 65: // a
+        moveLeft = true;
+        break;
+      case 40: // down
+      case 83: // s
+        moveBackward = true;
+        break;
+      case 39: // right
+      case 68: // d
+        moveRight = true;
+        break;
+      case 32: // space
+        if (canJump === true) velocity.y += 350;
+        canJump = false;
+        break;
+    }
+  }
+
+  function onKeyUp(e) {
+    switch(e.keyCode) {
+      case 38: // up
+      case 87: // w
+        moveForward = false;
+        break;
+      case 37: // left
+      case 65: // a
+        moveLeft = false;
+        break;
+      case 40: // down
+      case 83: // s
+        moveBackward = false;
+        break;
+      case 39: // right
+      case 68: // d
+        moveRight = false;
+        break;
+    }
+  }
+
+  function updateControls() {
+    if (controlsEnabled) {
+      var delta = clock.getDelta();
+      var walkingSpeed = 200.0;
+
+      velocity.x -= velocity.x * 10.0 * delta;
+      velocity.z -= velocity.z * 10.0 * delta;
+      velocity.y -= 9.8 * 100.0 * delta;
+
+      if (moveForward) velocity.z -= walkingSpeed * delta;
+      if (moveBackward) velocity.z += walkingSpeed * delta;
+      if (moveLeft) velocity.x -= walkingSpeed * delta;
+      if (moveRight) velocity.x += walkingSpeed * delta;
+
+      controls.getObject().translateX(velocity.x * delta);
+      controls.getObject().translateY(velocity.y * delta);
+      controls.getObject().translateZ(velocity.z * delta);
+
+      if (controls.getObject().position.y < 10) {
+        velocity.y = 0;
+        controls.getObject().position.y = 10;
+        canJump = true;
+      }
     }
   }
 
