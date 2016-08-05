@@ -1,114 +1,11 @@
 var micra = (function () {
-  var scene, renderer, camera;
-  var controls, controlsEnabled;
-  var moveForward,
-      moveBackward,
-      moveLeft,
-      moveRight,
-      canJump;
-  var velocity;
-  var clock;
-  var havePointerLock;
-  var walkSpeed = 40.0;
-  var sneekSpeed = 10.0;
-  var walkingSpeed = walkSpeed;
+  var camera, scene, renderer;
+  var geometry, material, mesh;
+  var controls;
 
-  var init = function () {
-    renderer = new THREE.WebGLRenderer({antialias: true});
-    renderer.setSize( window.innerWidth, window.innerHeight );
-    renderer.setClearColor(0x0033ff, 1);
-    // renderer.setClearColor(0xffffff, 1);
-    document.body.appendChild( renderer.domElement );
-    renderer.shadowMap.enabled = true;
+  var objects = [];
 
-    // TODO: フォグを付けるか検討
-    scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xffffff, 0.01, 180);
-
-    // カメラの設定は，視野角，画面サイズ，カメラの見える範囲の最小値，最大値
-    camera = new THREE.PerspectiveCamera( 45, window.innerWidth/window.innerHeight, 1, 150 );
-    // camera.position.set(0, 0, 0);
-    scene.add(camera);
-
-    ambientLight = new THREE.AmbientLight(0xffffff, 1);
-    scene.add( ambientLight );
-    directionalLight = new THREE.DirectionalLight( 0xffffff, 0.5 );
-    directionalLight.position.set( 7, 7, 7 );
-    scene.add( directionalLight );
-
-    // hemiLight = new THREE.HemisphereLight(0x0000ff, 0x00ff00, 0.6);
-    // scene.add( hemiLight );
-
-    controls = new THREE.PointerLockControls(camera);
-    scene.add(controls.getObject());
-
-    clock = new THREE.Clock();
-    velocity = new THREE.Vector3();
-
-    havePointerLock = checkForPointerLock();
-    initPointerLock();
-    initControls();
-
-    // TODO: ここで読み込んだテクスチャーで各ブロックを処理
-    textures = loadTexture();
-    var grounds = [
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.grass}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundBottom}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide})
-    ];
-    var innerGounds = [
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundBottom}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundBottom}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide}),
-    	new THREE.MeshBasicMaterial({color: 0xfffff, map: textures.groundSide})
-    ];
-
-    // キューブをいっぱい置いてみるテスト
-    // うまくいけばいろいろと分離
-    var side = 2;
-    var cubeGeometry = new THREE.BoxGeometry(side, side, side);
-    var material = new THREE.MeshFaceMaterial(innerGounds);
-    for (var k = 0; k < 5; k++) {
-      for (var i = 0; i < 40; i++) {
-        for (var j = 0; j < 40; j++) {
-          cube = new THREE.Mesh(cubeGeometry, material);
-          var x = j * side - 40;
-          var z = i * side - 40;
-          cube.position.set(x, k * side - 1, z);
-          // cube.position.set(x, -side / 2, z);
-          cube.castShadow = true;
-          cube.name = "cube-" + scene.children.length;
-          scene.add(cube);
-        }
-      }
-    }
-    material = new THREE.MeshFaceMaterial(grounds);
-    for (var i = 0; i < 15; i++) {
-      for (var j = 0; j < 40; j++) {
-        cube = new THREE.Mesh(cubeGeometry, material);
-        var x = j * side - 40;
-        var z = i * side - 40;
-        cube.position.set(x, 5 * side - 1, z);
-        cube.castShadow = true;
-        cube.name = "cube-" + scene.children.length;
-        scene.add(cube);
-      }
-    }
-
-    window.addEventListener('resize', onWindowResize, false);
-    window.addEventListener('click', onDocumentMouseDown, false);
-  };
-
-  var render = function () {
-    renderer.render(scene, camera);
-    updateControls();
-    requestAnimationFrame( render );
-  };
+  var raycaster;
 
   var loadTexture　= function () {
     var loader = new THREE.TextureLoader();
@@ -119,14 +16,341 @@ var micra = (function () {
       groundBottom: loader.load('assets/images/ground-bottom.png')
     };
   };
+  var innerGrounds;
+  var speedRate = 1;
+  var textures = loadTexture();
+  isCreate = false;
 
-  var onWindowResize = function () {
+  var blocker = document.getElementById( 'blocker' );
+  var instructions = document.getElementById( 'instructions' );
+
+  var havePointerLock = 'pointerLockElement' in document || 'mozPointerLockElement' in document || 'webkitPointerLockElement' in document;
+
+  if ( havePointerLock ) {
+
+    var element = document.body;
+
+    var pointerlockchange = function ( event ) {
+
+      if ( document.pointerLockElement === element || document.mozPointerLockElement === element || document.webkitPointerLockElement === element ) {
+
+        controlsEnabled = true;
+        controls.enabled = true;
+
+        blocker.style.display = 'none';
+
+      } else {
+
+        controls.enabled = false;
+
+        blocker.style.display = '-webkit-box';
+        blocker.style.display = '-moz-box';
+        blocker.style.display = 'box';
+
+        instructions.style.display = '';
+
+      }
+
+    };
+
+    var pointerlockerror = function ( event ) {
+
+      instructions.style.display = '';
+
+    };
+
+    // Hook pointer lock state change events
+    document.addEventListener( 'pointerlockchange', pointerlockchange, false );
+    document.addEventListener( 'mozpointerlockchange', pointerlockchange, false );
+    document.addEventListener( 'webkitpointerlockchange', pointerlockchange, false );
+
+    document.addEventListener( 'pointerlockerror', pointerlockerror, false );
+    document.addEventListener( 'mozpointerlockerror', pointerlockerror, false );
+    document.addEventListener( 'webkitpointerlockerror', pointerlockerror, false );
+
+    instructions.addEventListener( 'click', function ( event ) {
+
+      instructions.style.display = 'none';
+
+      // Ask the browser to lock the pointer
+      element.requestPointerLock = element.requestPointerLock || element.mozRequestPointerLock || element.webkitRequestPointerLock;
+
+      if ( /Firefox/i.test( navigator.userAgent ) ) {
+
+        var fullscreenchange = function ( event ) {
+
+          if ( document.fullscreenElement === element || document.mozFullscreenElement === element || document.mozFullScreenElement === element ) {
+
+            document.removeEventListener( 'fullscreenchange', fullscreenchange );
+            document.removeEventListener( 'mozfullscreenchange', fullscreenchange );
+
+            element.requestPointerLock();
+          }
+
+        };
+
+        document.addEventListener( 'fullscreenchange', fullscreenchange, false );
+        document.addEventListener( 'mozfullscreenchange', fullscreenchange, false );
+
+        element.requestFullscreen = element.requestFullscreen || element.mozRequestFullscreen || element.mozRequestFullScreen || element.webkitRequestFullscreen;
+
+        element.requestFullscreen();
+
+      } else {
+
+        element.requestPointerLock();
+
+      }
+
+    }, false );
+
+  } else {
+
+    instructions.innerHTML = 'Your browser doesn\'t seem to support Pointer Lock API';
+
+  }
+  var controlsEnabled = false;
+
+  var moveForward = false;
+  var moveBackward = false;
+  var moveLeft = false;
+  var moveRight = false;
+  var canJump = false;
+
+  var prevTime = performance.now();
+  var velocity = new THREE.Vector3();
+
+  function init() {
+
+    camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 1, 1000 );
+
+    scene = new THREE.Scene();
+    // scene.fog = new THREE.Fog( 0xffffff, 0, 750 );
+
+    var light = new THREE.HemisphereLight( 0xeeeeff, 0x777788, 0.75 );
+    light.position.set( 0.5, 1, 0.75 );
+    scene.add( light );
+
+    controls = new THREE.PointerLockControls( camera );
+    scene.add( controls.getObject() );
+
+    var onKeyDown = function ( event ) {
+      switch ( event.keyCode ) {
+        case 16:
+          speedRate = 0.2;
+          break;
+        case 17:
+          isCreate = true;
+          break;
+        case 38: // up
+        case 87: // w
+          moveForward = true;
+          break;
+
+        case 37: // left
+        case 65: // a
+          moveLeft = true; break;
+
+        case 40: // down
+        case 83: // s
+          moveBackward = true;
+          break;
+
+        case 39: // right
+        case 68: // d
+          moveRight = true;
+          break;
+
+        case 32: // space
+          if ( canJump === true ) velocity.y += 350;
+          canJump = false;
+          break;
+
+      }
+
+    };
+
+    var onKeyUp = function ( event ) {
+
+      switch( event.keyCode ) {
+        case 16:
+          speedRate = 1.0;
+          break;
+        case 17:
+          isCreate = false;
+          break;
+        case 38: // up
+        case 87: // w
+          moveForward = false;
+          break;
+        case 37: // left
+        case 65: // a
+          moveLeft = false;
+          break;
+        case 40: // down
+        case 83: // s
+          moveBackward = false;
+          break;
+        case 39: // right
+        case 68: // d
+          moveRight = false;
+          break;
+
+      }
+
+    };
+
+    document.addEventListener( 'keydown', onKeyDown, false );
+    document.addEventListener( 'keyup', onKeyUp, false );
+    document.addEventListener('click', onDocumentMouseDown, false);
+    // document.addEventListener('contextmenu', onContextMenue, false);
+
+    raycaster = new THREE.Raycaster( new THREE.Vector3(), new THREE.Vector3( 0, - 1, 0 ), 0, 10 );
+
+
+    // objects
+
+    geometry = new THREE.BoxGeometry( 20, 20, 20 );
+
+    var grounds = [
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.grass}),
+      new THREE.MeshBasicMaterial({map: textures.groundBottom}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide})
+    ];
+    innerGrounds = [
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundBottom}),
+      new THREE.MeshBasicMaterial({map: textures.groundBottom}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide})
+    ];
+
+    for ( var i = 0; i < 500; i ++ ) {
+
+      // material = new THREE.MeshPhongMaterial( { specular: 0xffffff, shading: THREE.FlatShading, vertexColors: THREE.VertexColors } );
+      material = new THREE.MeshFaceMaterial(grounds);
+
+      var mesh = new THREE.Mesh( geometry, material );
+      mesh.position.x = Math.floor( Math.random() * 20 - 10 ) * 20;
+      mesh.position.y = Math.floor( Math.random() * 20 ) * 20 + 10;
+      mesh.position.z = Math.floor( Math.random() * 20 - 10 ) * 20;
+      scene.add( mesh );
+
+      // material.color.setHSL( Math.random() * 0.2 + 0.5, 0.75, Math.random() * 0.25 + 0.75 );
+
+      objects.push( mesh );
+
+    }
+
+    // floor
+    for (var i = -200; i < 200; i += 20) {
+      for (var j = -200; j < 200; j += 20) {
+        material = new THREE.MeshFaceMaterial(innerGrounds);
+
+        var mesh = new THREE.Mesh( geometry, material );
+        mesh.position.x = j;
+        mesh.position.y = -10;
+        mesh.position.z = i;
+        scene.add( mesh );
+
+        // material.color.setHSL( Math.random() * 0.2 + 0.5, 0.75, Math.random() * 0.25 + 0.75 );
+
+        objects.push( mesh );
+
+      }
+    }
+
+
+
+
+
+    //
+
+    renderer = new THREE.WebGLRenderer();
+    renderer.setClearColor( 0xffffff );
+    renderer.setPixelRatio( window.devicePixelRatio );
+    renderer.setSize( window.innerWidth, window.innerHeight );
+    document.body.appendChild( renderer.domElement );
+
+    //
+
+    window.addEventListener( 'resize', onWindowResize, false );
+
+  }
+
+  function onWindowResize() {
+
     camera.aspect = window.innerWidth / window.innerHeight;
-  	camera.updateProjectionMatrix();
-  	renderer.setSize( window.innerWidth, window.innerHeight );
+    camera.updateProjectionMatrix();
+
+    renderer.setSize( window.innerWidth, window.innerHeight );
+
+  }
+
+  var render = function() {
+
+    requestAnimationFrame( render );
+
+    if ( controlsEnabled ) {
+      raycaster.ray.origin.copy( controls.getObject().position );
+      raycaster.ray.origin.y -= 10;
+
+      var intersections = raycaster.intersectObjects( objects );
+
+      var isOnObject = intersections.length > 0;
+
+      var time = performance.now();
+      var delta = ( time - prevTime ) / 1000;
+
+      velocity.x -= velocity.x * 10.0 * delta;
+      velocity.z -= velocity.z * 10.0 * delta;
+
+      velocity.y -= 9.8 * 100.0 * delta; // 100.0 = mass
+
+      if ( moveForward ) velocity.z -= 400.0 * delta * speedRate;
+      if ( moveBackward ) velocity.z += 400.0 * delta * speedRate;
+      if ( moveLeft ) velocity.x -= 400.0 * delta * speedRate;
+      if ( moveRight ) velocity.x += 400.0 * delta * speedRate;
+
+      if ( isOnObject === true ) {
+        velocity.y = Math.max( 0, velocity.y );
+
+        canJump = true;
+      }
+
+      controls.getObject().translateX( velocity.x * delta );
+      controls.getObject().translateY( velocity.y * delta );
+      controls.getObject().translateZ( velocity.z * delta );
+
+      if ( controls.getObject().position.y < 10 ) {
+
+        velocity.y = 0;
+        controls.getObject().position.y = 10;
+
+        canJump = true;
+
+      }
+
+      prevTime = time;
+
+    }
+
+    renderer.render( scene, camera );
+
   };
 
   var onDocumentMouseDown = function (event) {
+    console.log(controls.getObject().position);
+
+    if (isCreate) {
+      onContextMenue();
+      return;
+    }
+
     var raycaster = new THREE.Raycaster();
     var vector = new THREE.Vector3(0, 0, -1);
     raycaster.setFromCamera(vector, camera);
@@ -137,138 +361,32 @@ var micra = (function () {
       var cube = intersects[0].object;
       var pos = controls.getObject().position;
       var distance = (cube.position.x - pos.x) * (cube.position.x - pos.x) + (cube.position.y - pos.y) * (cube.position.y - pos.y) + (cube.position.z - pos.z) * (cube.position.z - pos.z);
-      console.log(distance);
-      if (distance < 30) {
+      // console.log(distance);
+      if (distance < 1200) {
         // intersects[0].object.material.transparent = true;
         scene.remove(cube)
+        // var index = objects.indexOf(cube);
+        // delete objects[index];
       }
     }
   };
+  var onContextMenue = function () {
+    innerGrounds = [
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundBottom}),
+      new THREE.MeshBasicMaterial({map: textures.groundBottom}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide}),
+      new THREE.MeshBasicMaterial({map: textures.groundSide})
+    ];
+    var geometry = new THREE.BoxGeometry( 20, 20, 20 );
+    var material = new THREE.MeshFaceMaterial(innerGrounds);
 
-  var checkForPointerLock = function () {
-    return 'pointerLockElement' in document || 'mozPointerLockElement' in document || 'wevkitPointerLockElement' in document;
+    var mesh = new THREE.Mesh( geometry, material );
+    var pos = controls.getObject().position;
+    mesh.position.set(pos.x, pos.y + 5, pos.z);
+    scene.add( mesh );
   };
-
-  function initPointerLock() {
-    var element = document.body;
-
-    if (havePointerLock) {
-      var pointerlockchange = function (event) {
-        if (document.pointerLockElement === element ||
-            document.mozPointerLockElement === element ||
-            document.webkitPointerLockElement === element) {
-          controlsEnabled = true;
-          controls.enabled = true;
-        } else {
-          controlsEnabled = false;
-          controls.enabled = false;
-        }
-      };
-
-      var pointerlockerror = function (event) {
-        element.innerHTML = 'PointerLock Error';
-      };
-
-      document.addEventListener('pointerlockchange', pointerlockchange, false);
-      document.addEventListener('mozpointerlockchange', pointerlockchange, false);
-      document.addEventListener('webkitpointerlockchange', pointerlockchange, false);
-
-      document.addEventListener('pointerlockerror', pointerlockerror, false);
-      document.addEventListener('mozpointerlockerror', pointerlockerror, false);
-      document.addEventListener('webkitpointerlockerror', pointerlockerror, false);
-
-      var requestPointerLock = function(event) {
-        element.requestPointerLock = element.requestPointerLock || element.mozRequestPointerLock || element.webkitRequestPointerLock;
-        element.requestPointerLock();
-      };
-      element.addEventListener('click', requestPointerLock, false);
-    } else {
-      element.innerHTML = 'Bad browser; No pointer lock';
-    }
-  }
-
-
-  function initControls() {
-    document.addEventListener('keydown', onKeyDown, false);
-    document.addEventListener('keyup', onKeyUp, false);
-  }
-
-  function onKeyDown(e) {
-    switch (e.keyCode) {
-      case 38: // up
-      case 87: // w
-        moveForward = true;
-        break;
-      case 37: // left
-      case 65: // a
-        moveLeft = true;
-        break;
-      case 40: // down
-      case 83: // s
-        moveBackward = true;
-        break;
-      case 39: // right
-      case 68: // d
-        moveRight = true;
-        break;
-      case 32: // space
-        if (canJump === true) velocity.y += 350;
-        canJump = false;
-        break;
-      case 16:
-        walkingSpeed = sneekSpeed;
-        break;
-    }
-  }
-
-  function onKeyUp(e) {
-    switch(e.keyCode) {
-      case 38: // up
-      case 87: // w
-        moveForward = false;
-        break;
-      case 37: // left
-      case 65: // a
-        moveLeft = false;
-        break;
-      case 40: // down
-      case 83: // s
-        moveBackward = false;
-        break;
-      case 39: // right
-      case 68: // d
-        moveRight = false;
-        break;
-      case 16:
-        walkingSpeed = walkSpeed;
-        break;
-    }
-  }
-
-  function updateControls() {
-    if (controlsEnabled) {
-      var delta = clock.getDelta();
-
-      velocity.x -= velocity.x * 10.0 * delta;
-      velocity.z -= velocity.z * 10.0 * delta;
-      velocity.y -= 9.8 * 100.0 * delta;
-
-      if (moveForward) velocity.z -= walkingSpeed * delta;
-      if (moveBackward) velocity.z += walkingSpeed * delta;
-      if (moveLeft) velocity.x -= walkingSpeed * delta;
-      if (moveRight) velocity.x += walkingSpeed * delta;
-
-      controls.getObject().translateX(velocity.x * delta);
-      controls.getObject().translateY(velocity.y * delta);
-      controls.getObject().translateZ(velocity.z * delta);
-
-      if (controls.getObject().position.y < 10) {
-        velocity.y = 0;
-        controls.getObject().position.y = 10;
-        canJump = true;
-      }
-    }
-  }
 
   return {
     init: init,
